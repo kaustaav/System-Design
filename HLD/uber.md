@@ -63,54 +63,9 @@
 
 ## High-Level Architecture
 
+![High-Level Architecture](./media/Uber_HLD.png)
 ```
-                        ┌─────────────┐     ┌─────────────┐
-                        │   Rider DB   │     │  Driver DB   │
-                        │  (Postgres)  │     │  (Postgres)  │
-                        └──────┬───────┘     └──────┬───────┘
-                               │                    │
-                        ┌──────▼────────────────────▼───────┐
-                        │         User Management Service    │
-                        └──────────────────┬────────────────┘
-                                           │
-┌──────────┐    ┌────────────────────────────────────────────────┐
-│  Rider   │    │                   API Gateway                   │
-│(iOS/And) ├───►│     Load Balancer | Rate Limit | Auth           │
-└──────────┘    └───────────────────────┬────────────────────────┘
-                                        │
-┌──────────┐                   ┌────────▼─────────┐
-│  Driver  │◄──────WebSocket───┤  Ride Management  ├──► Ride DB (Postgres)
-│(iOS/And) ├──────WebSocket───►│     Service       │
-└──────────┘                   └────────┬──────────┘
-      │                                 │
-      │ Location                   ┌────▼──────────────┐
-      │ every 5s                   │ Matchmaking Service│
-      │                            │ (Redis Lua + H3)   │
-      ▼                            └────────┬───────────┘
-┌─────────────────┐                         │
-│ Location Update │──► Kafka ──► Location   │
-│    Service      │   (by      Update Worker│
-└─────────────────┘  driverId) └────────────┘
-                                      │
-                          ┌───────────▼──────────────┐
-                          │     Location Cache        │
-                          │  (Redis — H3 geo index)   │
-                          │  Partitioned by Geography │
-                          └───────────┬──────────────┘
-                                      │
-                          ┌───────────▼──────────────┐
-                          │    Location DB            │
-                          │    (DynamoDB)             │
-                          │  Partition: driverId      │
-                          │  Sort: timestamp          │
-                          └──────────────────────────┘
 
-Supporting Services:
-├── ETA & Location Service (3rd Party — Google Maps + circuit breaker)
-├── Fare Estimation Service (ML models + Google Maps fallback)
-├── Payment Service (Stripe — async, circuit breaker)
-├── Notification Service (APN + FCM + idempotent keys)
-└── Analytical OLAP (Snowflake — batch aggregation)
 ```
 
 ### Component Responsibilities
