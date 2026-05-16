@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -375,6 +376,53 @@ public class Splitwise {
         if (!groupMap.containsKey(groupId))
             throw new RuntimeErrorException(null);
         groupMap.get(groupId).addUser(userId);
+    }
+
+    public void simplifyDebts(String groupId) {
+        if (!groupMap.containsKey(groupId))
+            throw new IllegalStateException("Group not found");
+
+        List<String> userIds = groupMap.get(groupId).getUsers();
+
+        // Step 1: collapse bilateral balances into a single net per user
+        // positive = net creditor (owed money), negative = net debtor (owes money)
+        Map<String, Double> net = new HashMap<>();
+        for (String uid : userIds) {
+            Map<String, Double> row = balanceSheet.getBalancesForUser(uid);
+            double sum = 0.0;
+            for (String other : userIds)
+                if (!other.equals(uid))
+                    sum += row.getOrDefault(other, 0.0);
+            net.put(uid, sum);
+        }
+
+        // Step 2: max-heap of creditors (largest balance first),
+        //         max-heap of debtors (most negative first)
+        PriorityQueue<String> creditors = new PriorityQueue<>(
+                (a, b) -> Double.compare(net.get(b), net.get(a)));
+        PriorityQueue<String> debtors = new PriorityQueue<>(
+                (a, b) -> Double.compare(net.get(a), net.get(b)));
+
+        for (String uid : userIds) {
+            if (net.get(uid) > 0.01)       creditors.offer(uid);
+            else if (net.get(uid) < -0.01) debtors.offer(uid);
+        }
+
+        // Step 3: greedily settle largest debtor against largest creditor
+        while (!creditors.isEmpty() && !debtors.isEmpty()) {
+            String creditor = creditors.poll();
+            String debtor   = debtors.poll();
+            double amount   = Math.min(net.get(creditor), -net.get(debtor));
+
+            System.out.println(userMap.get(debtor).getName() + " pays "
+                    + userMap.get(creditor).getName() + " RS " + amount);
+
+            net.merge(creditor, -amount, Double::sum);
+            net.merge(debtor,    amount, Double::sum);
+
+            if (net.get(creditor) > 0.01) creditors.offer(creditor);
+            if (net.get(debtor)  < -0.01)  debtors.offer(debtor);
+        }
     }
 
     public void showBalancesForUser(String userId) {
