@@ -4,34 +4,29 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 enum Coin {
-    ONE(1),
-    TWO(2),
-    FIVE(5),
-    TEN(10),
-    TWENTY(20),
-    FIFTY(50),
-    HUNDRED(100);
+    ONE(1), TWO(2), FIVE(5), TEN(10);
 
-    private int value;
+    private final int value;
 
     Coin(int value) {
         this.value = value;
     }
 
     public int getValue() {
-        return this.value;
+        return value;
     }
-
 }
 
-class Product {
+class Item {
     private final String id;
     private final String name;
+    private final String description;
     private volatile double price;
 
-    public Product(String id, String name, double price) {
+    public Item(String id, String name, String description, double price) {
         this.id = id;
         this.name = name;
+        this.description = description;
         this.price = price;
     }
 
@@ -41,6 +36,10 @@ class Product {
 
     public String getName() {
         return name;
+    }
+
+    public String getDescription() {
+        return description;
     }
 
     public double getPrice() {
@@ -53,66 +52,66 @@ class Product {
 }
 
 interface MachineState {
-    public void selectProduct(VendingMachine instance, Product product);
+    public void selectItem(VendingMachine instance, Item item);
 
     public void addMoney(VendingMachine instance, Coin coin);
 
-    public void refund(VendingMachine instance);
+    public void dispenseItem(VendingMachine instance);
 
-    public void dispense(VendingMachine instance);
+    public void refundMoney(VendingMachine instance);
 }
 
 class IdleMachineState implements MachineState {
-    @Override
-    public void selectProduct(VendingMachine instance, Product product) {
-        instance.setSelectedProduct(product);
-        instance.setCurrentState(new ItemSelectedMachineState());
-    }
 
     @Override
     public void addMoney(VendingMachine instance, Coin coin) {
-        System.out.println("No product selected");
+        throw new IllegalStateException("No product selected yet");
     }
 
     @Override
-    public void refund(VendingMachine instance) {
-        System.out.println("No Product Selected");
+    public void dispenseItem(VendingMachine instance) {
+        throw new IllegalStateException("No product selected yet");
     }
 
     @Override
-    public void dispense(VendingMachine instance) {
-        System.out.println("No Product Selected");
+    public void refundMoney(VendingMachine instance) {
+        throw new IllegalStateException("No product selected yet");
+    }
+
+    @Override
+    public void selectItem(VendingMachine instance, Item item) {
+        instance.setSelectedItem(item);
+        instance.setMachineState(new ItemSelectedMachineState());
     }
 }
 
 class ItemSelectedMachineState implements MachineState {
-    @Override
-    public void selectProduct(VendingMachine instance, Product product) {
-        instance.setSelectedProduct(product);
-    }
 
     @Override
     public void addMoney(VendingMachine instance, Coin coin) {
         instance.setBalance(instance.getBalance() + coin.getValue());
-        instance.setCurrentState(new HasMoneyMachineState());
+        instance.setMachineState(new HasMoneyMachineState());
     }
 
     @Override
-    public void refund(VendingMachine instance) {
-        System.out.println("No balance added yet");
+    public void dispenseItem(VendingMachine instance) {
+        throw new IllegalStateException("Please add coin to dispense item");
+
     }
 
     @Override
-    public void dispense(VendingMachine instance) {
-        System.out.println("No balance added yet");
+    public void refundMoney(VendingMachine instance) {
+        throw new IllegalStateException("No balance to refund");
+
+    }
+
+    @Override
+    public void selectItem(VendingMachine instance, Item item) {
+        instance.setSelectedItem(item);
     }
 }
 
 class HasMoneyMachineState implements MachineState {
-    @Override
-    public void selectProduct(VendingMachine instance, Product product) {
-        System.out.println("Product already selected");
-    }
 
     @Override
     public void addMoney(VendingMachine instance, Coin coin) {
@@ -120,39 +119,47 @@ class HasMoneyMachineState implements MachineState {
     }
 
     @Override
-    public void refund(VendingMachine instance) {
-        System.out.println("Refund Initiated");
-        instance.setBalance(0.0);
+    public void dispenseItem(VendingMachine instance) {
+        Item selectedItem = instance.getSelectedItem();
+        if (instance.getBalance() >= selectedItem.getPrice()) {
+            instance.reduceSelectedProductStock();
+            instance.setBalance(instance.getBalance() - selectedItem.getPrice());
+            refundMoney(instance);
+        } else {
+            throw new IllegalStateException("Not enough balance");
+        }
+
+    }
+
+    @Override
+    public void refundMoney(VendingMachine instance) {
+        if (instance.getBalance() > 0.0D) {
+            System.out.println("Initiating refund");
+            instance.setBalance(0.0D);
+            System.out.println("Your money has been successfully refunded");
+        }
         instance.resetInstance();
     }
 
     @Override
-    public void dispense(VendingMachine instance) {
-        if (instance.getSelectedProduct().getPrice() <= instance.getBalance()) {
-            if (!instance.isProductAvailable(instance.getSelectedProduct()))
-                throw new IllegalStateException("Product out of stock");
-            instance.reduceSelectedProductStock();
-            instance.setBalance(instance.getBalance() - instance.getSelectedProduct().getPrice());
-            this.refund(instance);
-        } else
-            System.out.println("Insufficient Money");
+    public void selectItem(VendingMachine instance, Item item) {
+        throw new IllegalStateException("Product already selected");
     }
 }
 
 public class VendingMachine {
     private static volatile VendingMachine instance;
-    private final Map<String, Product> productMap;
+    private final Map<String, Item> itemMap;
     private final Map<String, Integer> inventory;
-    private Product selectedProduct;
-    private MachineState currentState;
+    private MachineState machineState;
+    private Item selectedItem;
     private Double balance;
 
     private VendingMachine() {
-        productMap = new ConcurrentHashMap<>();
+        itemMap = new ConcurrentHashMap<>();
         inventory = new ConcurrentHashMap<>();
-        selectedProduct = null;
-        currentState = new IdleMachineState();
-        balance = 0.0;
+        machineState = new IdleMachineState();
+        balance = 0.0D;
     }
 
     public static VendingMachine getInstance() {
@@ -164,91 +171,88 @@ public class VendingMachine {
         return instance;
     }
 
-    public void addProduct(Product product, int quantity) {
+    public void updateItemPrice(Item item, double price) {
         synchronized (this) {
-            if (productMap.containsKey(product.getId()))
-                inventory.compute(product.getId(), (k, v) -> v + quantity);
-            else {
-                productMap.put(product.getId(), product);
-                inventory.put(product.getId(), quantity);
+            if (!itemMap.containsKey(item.getId()))
+                throw new IllegalArgumentException("Item not found");
+            item.setPrice(price);
+        }
+    }
+
+    public void addItem(Item item, int quantity) {
+        synchronized (this) {
+            if (itemMap.containsKey(item.getId())) {
+                inventory.compute(item.getId(), (k, v) -> v + quantity);
+            } else {
+                itemMap.put(item.getId(), item);
+                inventory.put(item.getId(), quantity);
             }
         }
     }
 
-    public void removeProduct(Product product) {
+    public void selectItem(Item item) {
+        if (!itemMap.containsKey(item.getId()))
+            throw new IllegalArgumentException("Item not found");
         synchronized (this) {
-
+            if (isProductAvailable(item))
+                machineState.selectItem(this, item);
         }
-    }
 
-    public void updatePrice(Product product, double price) {
-        synchronized (this) {
-            if (!productMap.containsKey(product.getId()))
-                throw new IllegalStateException("Product not found");
-            product.setPrice(price);
-        }
     }
 
     protected void reduceSelectedProductStock() {
-        inventory.put(selectedProduct.getId(), inventory.get(selectedProduct.getId()) - 1);
-    }
-
-    public void selectProduct(Product product) {
-        synchronized (this) {
-            product = productMap.getOrDefault(product.getId(), null);
-            if (product == null)
-                throw new IllegalStateException("Product doesn't exist");
-            currentState.selectProduct(this, product);
-        }
+        inventory.compute(selectedItem.getId(), (k, v) -> v - 1);
     }
 
     public void addMoney(Coin coin) {
         synchronized (this) {
-            currentState.addMoney(this, coin);
+            machineState.addMoney(this, coin);
         }
+
     }
 
     public void refundMoney() {
         synchronized (this) {
-            currentState.refund(this);
+            machineState.refundMoney(this);
         }
+
     }
 
-    public void dispenseProduct() {
+    public void dispenseItem() {
         synchronized (this) {
-            currentState.dispense(this);
+            machineState.dispenseItem(this);
         }
     }
 
     protected void resetInstance() {
-        selectedProduct = null;
-        currentState = new IdleMachineState();
+        machineState = new IdleMachineState();
+        selectedItem = null;
     }
 
-    protected void setCurrentState(MachineState currentState) {
-        this.currentState = currentState;
+    protected void setMachineState(MachineState machineState) {
+        this.machineState = machineState;
     }
 
-    protected void setBalance(Double balance) {
-        this.balance = balance;
+    public Item getSelectedItem() {
+        return selectedItem;
     }
 
-    public Product getSelectedProduct() {
-        return selectedProduct;
+    protected void setSelectedItem(Item selectedItem) {
+        this.selectedItem = selectedItem;
     }
 
     public Double getBalance() {
         return balance;
     }
 
-    protected void setSelectedProduct(Product selectedProduct) {
-        this.selectedProduct = selectedProduct;
+    protected void setBalance(Double balance) {
+        this.balance = balance;
     }
 
-    public boolean isProductAvailable(Product product) {
-        product = productMap.getOrDefault(product.getId(), null);
-        if (product == null)
-            throw new IllegalStateException("Product doesn't exist");
-        return inventory.getOrDefault(product.getId(), 0) > 0;
+    protected boolean isProductAvailable(Item item) {
+        if (!itemMap.containsKey(item.getId()))
+            throw new IllegalArgumentException("Item not found");
+        return inventory.getOrDefault(item.getId(), 0) > 0;
     }
+
 }
