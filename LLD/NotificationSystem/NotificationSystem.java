@@ -5,7 +5,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +35,10 @@ class Receiver {
         this.pushToken = Optional.ofNullable(pushToken);
     }
 
+    public String getId() {
+        return id;
+    }
+
     public String getName() {
         return name;
     }
@@ -62,12 +65,16 @@ class Notification {
     private NotificationStatus notificationStatus;
 
     private Notification(Builder builder) {
-        this.id = UUID.randomUUID().toString().substring(0, 8);
+        this.id = builder.id;
         this.receiver = builder.receiver;
         this.notificationType = builder.notificationType;
         this.content = builder.content;
         this.subject = builder.subject;
         this.notificationStatus = NotificationStatus.PENDING;
+    }
+
+    public String getId() {
+        return id;
     }
 
     public Receiver getReceiver() {
@@ -95,12 +102,14 @@ class Notification {
     }
 
     public static class Builder {
+        private String id;
         private Receiver receiver;
         private NotificationType notificationType;
         private String content;
         private String subject;
 
         public Builder() {
+            this.id = UUID.randomUUID().toString().substring(0, 8);
         }
 
         public Builder receiver(Receiver receiver) {
@@ -228,5 +237,12 @@ class NotificationService {
 
     public void shutdown() {
         executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(30, TimeUnit.SECONDS))
+                executorService.shutdownNow();
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }

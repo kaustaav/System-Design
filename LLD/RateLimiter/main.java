@@ -1,8 +1,8 @@
 package RateLimiter;
 
+import java.util.LinkedList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class main {
 }
@@ -23,16 +23,16 @@ class TokenBucketRateLimitingStrategy implements RateLimitingStrategy {
     @Override
     public boolean shouldAllowRequests(String apiToken, int maxRequest) {
         long currentTime = System.currentTimeMillis();
-        requestMap.putIfAbsent(apiToken, new TokenBucket(currentTime, maxRequest));
-        TokenBucket tokenBucket = requestMap.get(apiToken);
+        TokenBucket tokenBucket = requestMap.computeIfAbsent(
+                apiToken,
+                k -> new TokenBucket(currentTime, maxRequest));
         synchronized (tokenBucket) {
             tokenBucket.refill(currentTime);
-            if(tokenBucket.tokensLeft > 0) {
+            if (tokenBucket.tokensLeft > 0) {
                 tokenBucket.tokensLeft--;
                 return true;
             }
-            else
-                return false;
+            return false;
         }
     }
 
@@ -48,16 +48,19 @@ class TokenBucketRateLimitingStrategy implements RateLimitingStrategy {
         }
 
         public void refill(long currentTime) {
-            int tokensToAdd = (int) (maxCapacity * (currentTime - lastRefilledTime) / windowSizeInMillis);
-            if(tokensToAdd > 0) {
-                this.tokensLeft = Math.min(this.tokensLeft + tokensToAdd, maxCapacity);
+            long elapsed = currentTime - lastRefilledTime;
+            long tokensToAdd = (maxCapacity * elapsed) / windowSizeInMillis;
+            if (tokensToAdd > 0) {
+                this.tokensLeft = (int) Math.min(
+                        this.tokensLeft + tokensToAdd,
+                        maxCapacity);
                 this.lastRefilledTime = currentTime;
             }
         }
     }
 }
 
-class FixedWindowRateLimitingStrategy implements  RateLimitingStrategy {
+class FixedWindowRateLimitingStrategy implements RateLimitingStrategy {
     private final long windowSizeInMillis;
     private final Map<String, FixedWindow> requestMap;
 
@@ -69,17 +72,18 @@ class FixedWindowRateLimitingStrategy implements  RateLimitingStrategy {
     @Override
     public boolean shouldAllowRequests(String apiToken, int maxRequest) {
         long currentTime = System.currentTimeMillis();
-        requestMap.putIfAbsent(apiToken, new FixedWindow(currentTime));
-        FixedWindow fixedWindow = requestMap.get(apiToken);
+        FixedWindow fixedWindow = requestMap.computeIfAbsent(
+                apiToken,
+                k -> new FixedWindow(currentTime));
         synchronized (fixedWindow) {
-            if(currentTime - fixedWindow.currentWindow >= windowSizeInMillis)
-                fixedWindow.reset(currentTime);
-            if(fixedWindow.counter >= maxRequest)
-                return false;
-            else {
-                fixedWindow.counter++;
-                return true;
+            long currentWindow = (currentTime / windowSizeInMillis) * windowSizeInMillis;
+            if (currentWindow > fixedWindow.currentWindow) {
+                fixedWindow.reset(currentWindow);
             }
+            if (fixedWindow.counter >= maxRequest)
+                return false;
+            fixedWindow.counter++;
+            return true;
         }
     }
 
@@ -87,14 +91,85 @@ class FixedWindowRateLimitingStrategy implements  RateLimitingStrategy {
         public int counter;
         public long currentWindow;
 
-        public FixedWindow(long currentWindow) {
+        public FixedWindow(long currentTime) {
+            this.currentWindow = (currentTime / windowSizeInMillis) * windowSizeInMillis;
             this.counter = 0;
-            this.currentWindow = currentWindow;
         }
 
         public void reset(long windowStart) {
             this.currentWindow = windowStart;
             this.counter = 0;
+        }
+    }
+}
+
+class SlidingWindowLogRateLimitingStrategy implements RateLimitingStrategy {
+    private final long windowSizeInMillis;
+    private final Map<String, LinkedList<Long>> requestMap;
+
+    public SlidingWindowLogRateLimitingStrategy(long windowSizeInMillis) {
+        this.windowSizeInMillis = windowSizeInMillis;
+        this.requestMap = new ConcurrentHashMap<>();
+    }
+
+    @Override
+    public boolean shouldAllowRequests(String apiToken, int maxRequest) {
+        long currentTime = System.currentTimeMillis();
+        LinkedList<Long> timestamps = requestMap.computeIfAbsent(apiToken, k -> new LinkedList<>());
+        synchronized (timestamps) {
+            while (!timestamps.isEmpty() && currentTime - timestamps.peekFirst() >= windowSizeInMillis)
+                timestamps.pollFirst();
+            if (timestamps.size() >= maxRequest)
+                return false;
+            timestamps.addLast(currentTime);
+            return true;
+        }
+    }
+}
+
+class SlidingWindowCounterRateLimitingStrategy implements RateLimitingStrategy {
+    private final long windowSizeInMillis;
+    private final Map<String, SlidingWindowCounter> requestMap;
+
+    public SlidingWindowCounterRateLimitingStrategy(long windowSizeInMillis) {
+        this.windowSizeInMillis = windowSizeInMillis;
+        this.requestMap = new ConcurrentHashMap<>();
+    }
+
+    @Override
+    public boolean shouldAllowRequests(String apiToken, int maxRequest) {
+        long currentTime = System.currentTimeMillis();
+        SlidingWindowCounter counter = requestMap.computeIfAbsent(apiToken,
+                k -> new SlidingWindowCounter(currentTime));
+        synchronized (counter) {
+            counter.updateWindow(currentTime);
+            double elapsed = (double) (currentTime - counter.currentWindowStart) / windowSizeInMillis;
+            double estimatedCount = counter.currentCount + counter.previousCount * (1 - elapsed);
+            if (estimatedCount >= maxRequest)
+                return false;
+            counter.currentCount++;
+            return true;
+        }
+    }
+
+    class SlidingWindowCounter {
+        public long currentWindowStart;
+        public int currentCount;
+        public int previousCount;
+
+        public SlidingWindowCounter(long currentTime) {
+            this.currentWindowStart = (currentTime / windowSizeInMillis) * windowSizeInMillis;
+            this.currentCount = 0;
+            this.previousCount = 0;
+        }
+
+        public void updateWindow(long currentTime) {
+            long newWindowStart = (currentTime / windowSizeInMillis) * windowSizeInMillis;
+            if (newWindowStart > currentWindowStart) {
+                previousCount = currentCount;
+                currentCount = 0;
+                currentWindowStart = newWindowStart;
+            }
         }
     }
 }
@@ -111,17 +186,18 @@ class RateLimiter {
     }
 
     public static RateLimiter getInstance() {
-        if(instance == null)
+        if (instance == null)
             synchronized (RateLimiter.class) {
-                if(instance == null)
+                if (instance == null)
                     instance = new RateLimiter();
             }
         return instance;
     }
 
     public void handleRequest(String apiToken) {
-        boolean shouldAllow = rateLimitingStrategy.shouldAllowRequests(apiToken, premiumUsersMap.getOrDefault(apiToken, this.maxRequest));
-        if(shouldAllow)
+        boolean shouldAllow = rateLimitingStrategy.shouldAllowRequests(apiToken,
+                premiumUsersMap.getOrDefault(apiToken, this.maxRequest));
+        if (shouldAllow)
             System.out.println("Request accepted");
         else
             System.out.println("Request denied");
