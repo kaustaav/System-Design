@@ -1,52 +1,38 @@
 package ConcurrenyPractices;
 
 import java.util.LinkedList;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
 
 public class BlockingQueue<T> {
     private final int capacity;
     private final LinkedList<T> queue = new LinkedList<>();
-    private final ReentrantLock lock = new ReentrantLock();
-    private final Condition notFull = lock.newCondition();
-    private final Condition notEmpty = lock.newCondition();
+    private final Object lock = new Object();
 
     public BlockingQueue(int capacity) {
         this.capacity = capacity;
     }
 
     public void put(T item) throws InterruptedException {
-        lock.lock();
-        try {
+        synchronized (lock) {
             while (queue.size() == capacity)
-                notFull.await();
+                lock.wait();
             queue.add(item);
-            notEmpty.signal();
-        } finally {
-            lock.unlock();
+            lock.notifyAll();
         }
-
     }
 
     public T take() throws InterruptedException {
-        lock.lock();
-        try {
+        synchronized (lock) {
             while (queue.isEmpty())
-                notEmpty.await();
+                lock.wait();
             T item = queue.poll();
-            notFull.signal();
+            lock.notifyAll();
             return item;
-        } finally {
-            lock.unlock();
         }
     }
 
     public int size() {
-        lock.lock();
-        try {
+        synchronized (lock) {
             return queue.size();
-        } finally {
-            lock.unlock();
         }
     }
 
@@ -71,7 +57,7 @@ public class BlockingQueue<T> {
         Thread consumer1 = new Thread(() -> {
             try {
                 for (int i = 0; i < 3; i++) {
-                    Thread.sleep(250); // slower than producer → queue fills up
+                    Thread.sleep(250);
                     System.out.println("  Consumer-1 took: " + queue.take() + " | size: " + queue.size());
                 }
             } catch (InterruptedException e) {
